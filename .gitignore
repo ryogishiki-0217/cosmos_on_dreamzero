@@ -1,0 +1,20 @@
+# Python environments
+.venv/
+venv/
+env/
+*.py[cod]
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+
+# Local mount / data path (do not commit)
+data1/
+
+# RoboCasa simulation assets (large; reinstall via ROBOCASA.md scripts)
+robocasa-cosmos-policy/robocasa/models/assets/
+
+# Training & eval artifacts (checkpoints, logs; often large)
+outputs/
+
+# Stray file sometimes seen in project root
+=5.13.0
