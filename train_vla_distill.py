@@ -253,7 +253,7 @@ class TrainConfig:
     # This overrides whatever checkpoint.load_path the experiment config would otherwise use.
     student_ckpt_path: str = ""
     teacher_path: str = ""
-    dreamzero_path: str = "/workspace/dreamzero"  # Dream Zero repo root (where 'groot' lives). Default: env DREAMZERO_PATH or /workspace/dreamzero
+    drpath: str = "/workspace/dreamzero"  # Dream Zero repo root (where 'groot' lives). Default: env DREAMZERO_PATH or /workspace/dreamzero
     teacher_config: str = ""  # Optional: path to config.json (or dir containing it) when checkpoint dir has no config.json
     teacher_fp32: bool = False  # 若 True，Teacher 以 float32 加载并前向，避免 bfloat16 下 NaN（显存更大）
     output_dir: str = "/workspace/data1/outputs/vla_distill"
@@ -434,7 +434,13 @@ def load_student_model(
     from cosmos_policy._src.imaginaire.config import load_config
 
     logger.info(f"Loading student model from config: {student_config_path}")
-    opts = ["--", "model.config.fsdp_shard_size=1"]  # Always disable FSDP for distill (single-GPU or per-process sinel, "config"):
+    opts = ["--", "model.config.fsdp_shard_size=1"]  # Always disable FSDP for distill (single-GPU or per-process single GPU).
+    if student_experiment:
+        opts.extend([f"experiment={student_experiment}"])
+    config = load_config(student_config_path, opts)
+    # Force FSDP off so single-GPU run (no RANK) and multi-GPU with CUDA_VISIBLE_DEVICES pinning both work.
+    try:
+        if hasattr(config, "model") and hasattr(config.model, "config"):
             config.model.config.fsdp_shard_size = 1
     except Exception:
         pass
@@ -467,11 +473,7 @@ def _load_student_policy_checkpoint(student: nn.Module, ckpt_path: str) -> None:
     Best-effort load for official Cosmos Policy checkpoints (e.g. RoboCasa policy .pt).
     Loads model weights only (no optimizer/scheduler).
 
-    Note: ``BaseDiffusionModel.load_state_dict(..., strict=False)`` in text2world_model.py
-    does not return ``_IncompatibleKeys`` (implicit None). We handle that case.
-
-    Evaluation uses ``cosmos_policy.experiments.robot.cosmos_utils.load_model_from_checkpoint``
-    (see ``get_model``); for distill we load the same ``.pt`` onto an already-instantiated student.
+    Note: ``BaseDiffusionModel.load_state_dict(..ent.
     """
     ckpt_path = (ckpt_path or "").strip()
     if not ckpt_path:
@@ -857,9 +859,7 @@ def train(config: TrainConfig):
         adapter_bottleneck_dim=config.adapter_bottleneck_dim,
         adapter_dropout=config.adapter_dropout,
         num_adapter_output_tokens=config.num_adapter_output_tokens,
-        num_specialized_experts=config.num_specialized_experts,
-        top_k=config.top_k,
-        gating_hidden_dim=config.gating_hidden_dim,
+        num_specialized_experts=config.num_specialized_expating_hidden_dim,
         use_action_fp32=getattr(config, "use_action_fp32", False),
         teacher_layer_index=getattr(config, "teacher_layer_index", 40),
     )
@@ -966,7 +966,11 @@ def train(config: TrainConfig):
             dataloader_train.sampler.set_epoch(epoch)
 
         for data_batch in dataloader_train:
-            if iteration >= config.max_itera  def _to_device(v):
+            if iteration >= config.max_iterations:
+                break
+
+            # Move batch to GPU (convert numpy to tensor if needed)
+            def _to_device(v):
                 if isinstance(v, torch.Tensor):
                     return v.to(device, non_blocking=True)
                 if isinstance(v, np.ndarray):
@@ -1073,10 +1077,7 @@ def train(config: TrainConfig):
                             torch.cuda.synchronize()
                         dt = time.time() - _early_last_hit_time
                         _early_last_hit_time = time.time()
-                        logger.info(
-                            f"Iteration {iteration+1}: "
-                            f"Hit counter: {_early_hit_counter+1}/{_early_hit_thres} | "
-                            f"Loss: {total_loss.item():.4f} | "
+                        s: {total_loss.item():.4f} | "
                             f"Time: {dt:.2f}s"
                         )
                         _early_hit_counter += 1
@@ -1154,7 +1155,11 @@ def train(config: TrainConfig):
             # --- Logging ---
             running_loss += total_loss.item()
             running_lb_loss += loss_dict["load_balance_loss"].item()
-            running_edm_loss += _scalar_to_float(loss_dict["student_edm_loss"b = running_lb_loss / config.log_every
+            running_edm_loss += _scalar_to_float(loss_dict["student_edm_loss"])
+
+            if is_main and (iteration + 1) % config.log_every == 0:
+                avg_loss = running_loss / config.log_every
+                avg_lb = running_lb_loss / config.log_every
                 avg_edm = running_edm_loss / config.log_every
                 elapsed = time.time() - t_start
                 it_per_sec = config.log_every / elapsed
@@ -1521,7 +1526,7 @@ def _build_placeholder_dataloader(
                 # student text2world_model requires uint8 video input before normalization.
                 "video": torch.randint(0, 256, (3, num_frames, H, W), dtype=torch.uint8),
                 # [ORIGINAL CODE - kept for traceability]
-                # "t5_text_embeddings": torch.randn(text_len, 4096),
+                # "t5_texlen, 4096),
                 # [MODIFIED 2026-03-23] Reason: student cross-attn expects text context dim=1024 in current config.
                 "t5_text_embeddings": torch.randn(text_len, 1024),
                 # [MODIFIED 2026-03-23] Reason: keep dtype consistent with real datasets
@@ -1555,7 +1560,7 @@ def _build_placeholder_dataloader(
                 "teacher_state": torch.randn(num_frames - 1, teacher_state_dim),
                 "teacher_embodiment_id": torch.tensor(0, dtype=torch.long),
                 "teacher_has_real_action": torch.tensor(True),
-                "teacher_action_mask": torc=torch.bool),
+                "teacher_action_mask": torch.ones(teacher_action_len, dtype=torch.bool),
             }
 
     dataset = _PlaceholderDataset()
